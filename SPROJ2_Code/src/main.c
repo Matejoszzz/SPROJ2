@@ -44,14 +44,18 @@ ISR(TIMER1_COMPA_vect) {
 }
 
 ISR(INT0_vect) {
-    uint32_t now = current_time_ms;
-    uint16_t rr = now - last_beat_ms;
+    uint16_t rr = current_time_ms - last_beat_ms;
 
-    if (last_beat_ms != 0 && rr_index < MAX_RR) {
-        rr_intervals[rr_index++] = rr;
+    if (rr_index == MAX_RR)
+    {
+      rr_index = 0;
+    }
+    
+    if (last_beat_ms != 0) {
+        rr_intervals[rr_index] = rr;
     }
 
-    last_beat_ms = now;
+    last_beat_ms = current_time_ms;
     beat_count++;
 }
 
