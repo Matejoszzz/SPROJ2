@@ -9,11 +9,11 @@
 #include "adcpwm.h"
 
 #define MAX_RR 30
-#define RESP_SIZE 150
+#define RESP_SIZE 300
 
 typedef struct
 {
-    float heartRate;
+    int heartRate;
     float hrv;
     int respiratoryRate;
     float bodyTemperature;
@@ -34,7 +34,6 @@ float temp;
 // Respiratory Rate variables
 volatile uint16_t potPosition[RESP_SIZE] = {0};
 volatile uint8_t potIndex = 0;
-
 volatile uint8_t refresh = 0;
 
 void timer_init()
@@ -57,16 +56,6 @@ void ext_interrupt_init()
 ISR(TIMER1_COMPA_vect)
 {
     current_time_ms++;
-    if (current_time_ms % 200 == 0)
-    {
-        potPosition[potIndex] = adc_read(0);
-        potIndex++;
-        if (potIndex == RESP_SIZE)
-        {
-            potIndex = 0;
-        }
-    }
-
     if ((current_time_ms % 1000) == 0)
     {
         seconds++;
@@ -91,15 +80,14 @@ ISR(INT0_vect)
     beat_count++;
 }
 
-float calculate_HRV()
-{
-    if (seconds < 15)
-        return 0;
+HealthData getData(){
+
+    HealthData result;
 
     float mean = 0;
     for (uint8_t i = 0; i < MAX_RR; i++)
         mean += rr_intervals[i];
-    HR = 60 * MAX_RR / (mean / 1000);
+    result.heartRate = 60 * MAX_RR / (mean / 1000);
     mean = mean / MAX_RR;
 
     float variance = 0;
@@ -109,13 +97,10 @@ float calculate_HRV()
         variance += diff * diff;
     }
 
-    return sqrt(variance / MAX_RR); // SDNN
-}
+    result.hrv = sqrt(variance / MAX_RR); // SDNN
 
-int getRespiratoryRate()
-{
     int peaks = 0;
-    for (uint8_t i = 1, j = 0; i < 150; i++)
+    for (uint8_t i = 1, j = 0; i < RESP_SIZE; i++)
     {
         if (potPosition[i] >= potPosition[i - 1])
         {
@@ -131,7 +116,11 @@ int getRespiratoryRate()
         }
     }
 
-    return peaks * 2;
+    result.respiratoryRate = peaks;
+
+    result.bodyTemperature = ((5 * adc_read(1) / 1024) + 9) * (100/32.1);
+
+    return result;
 }
 
 int main(void)
@@ -151,52 +140,68 @@ int main(void)
 
     HealthData window[60] = {0};
     int wIndex = 0;
-    HealthData data[15] = {0};
-    int dataIndex = 0;
+    HealthData data = {0};
+    HealthData baseline;
 
     while (1)
     {
 
-        if (seconds < 15)
+        if (current_time_ms % 200 == 0)
+        {
+            potPosition[potIndex] = adc_read(0);
+            if(seconds < 30) potPosition[RESP_SIZE-potIndex] = potPosition[potIndex];
+            potIndex++;
+            if (potIndex == RESP_SIZE)
+            {
+                potIndex = 0;
+            }
+        }
+
+        if (seconds < 30)
         {
             LCD_set_cursor(0, 0);
-            printf("Waiting... %d s", seconds);
+            printf("Collecting data... %d s", seconds);
         }
         else if (refresh)
         {
             refresh = 0;
-            window[wIndex].respiratoryRate = getRespiratoryRate();
-            window[wIndex].hrv = calculate_HRV();
-            window[wIndex].heartRate = HR;
-            window[wIndex].bodyTemperature = (6 * adc_read(1) / 1024) + 34;
-            
+            window[wIndex] = getData();
+
             LCD_clear();
             LCD_set_cursor(0, 0);
-            printf("HRV: %.1f / %.0f ms", window[wIndex].hrv, data[0].hrv);
+            printf("HR: %d / %.0f BPM", window[wIndex].heartRate, baseline.heartRate);
             LCD_set_cursor(0, 1);
-            printf("Time: %d s", seconds);
+            printf("HRV: %.1f / %.1f ms", window[wIndex].hrv, baseline.hrv);
             LCD_set_cursor(0, 2);
-            printf("HR: %.0f / %.0f BPM", window[wIndex].heartRate, data[0].heartRate);
+            printf("RR: %d / %i RPM", window[wIndex].respiratoryRate, baseline.respiratoryRate);
             LCD_set_cursor(0, 3);
-            printf("RR: %i / %i RPM", window[wIndex].respiratoryRate, data[0].respiratoryRate);
-            wIndex += 1;
+            printf("Temp: %.1f / %.1f C", window[wIndex].bodyTemperature, baseline.bodyTemperature);
+            LCD_set_cursor(18, 0);
+            printf("0");
+            LCD_set_cursor(17, 3);
+            printf("%d", seconds);
             
+            wIndex += 1;
         }
         if (wIndex == 60)
         {
             for (int i = 0; i < 60; i++)
             {
-                data[dataIndex].bodyTemperature += window[i].bodyTemperature;
-                data[dataIndex].heartRate += window[i].heartRate;
-                data[dataIndex].hrv += window[i].hrv;
-                data[dataIndex].respiratoryRate += window[i].respiratoryRate;
+                data.bodyTemperature += window[i].bodyTemperature;
+                data.heartRate += window[i].heartRate;
+                data.hrv += window[i].hrv;
+                data.respiratoryRate += window[i].respiratoryRate;
             }
-            data[dataIndex].bodyTemperature /= 60;
-            data[dataIndex].heartRate /= 60;
-            data[dataIndex].hrv /= 60;
-            data[dataIndex].respiratoryRate /= 60;
+            data.bodyTemperature /= 60;
+            data.heartRate /= 60;
+            data.hrv /= 60;
+            data.respiratoryRate /= 60;
             wIndex = 0;
-            dataIndex++;
+            if (seconds < 120)
+            {
+                baseline = data;
+            }
+            
         }
     }
 
